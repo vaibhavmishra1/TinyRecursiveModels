@@ -44,6 +44,8 @@ python nqweens/train_8x8.py \
   --checkpoint-path checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8
 ```
 
+By default, training saves an EMA checkpoint and runs N-Queens inference after every `--eval-interval` epochs. With the default `--eval-interval 300`, this produces `nqweens_eval_metrics.jsonl` in the checkpoint directory every 300 epochs. Add `--no-infer-every-eval` to disable periodic inference.
+
 Run inference with ACT halting and LPRM-ranked candidate selection, and report validity plus coverage with 20 samples:
 
 ```bash
@@ -87,6 +89,12 @@ Useful VM smoke run:
 
 ```bash
 EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/install_train_infer_8x8.sh
+```
+
+Disable periodic inference during training:
+
+```bash
+INFER_EVERY_EVAL=0 bash nqweens/install_train_infer_8x8.sh
 ```
 
 Install dependencies only:

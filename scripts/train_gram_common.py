@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 import json
 import time
 
@@ -163,15 +163,20 @@ def create_optimizers(config: GRAMTrainConfig, model: nn.Module):
     return optimizers, dense_params
 
 
-def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optional[EMAHelper] = None):
+def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optional[EMAHelper] = None) -> Path:
     path.mkdir(parents=True, exist_ok=True)
+    checkpoint_file = path / f"step_{step}"
     model_to_save = ema_helper.ema_copy(model) if ema_helper is not None else model
-    torch.save(model_to_save.state_dict(), path / f"step_{step}")
+    torch.save(model_to_save.state_dict(), checkpoint_file)
     if model_to_save is not model:
         del model_to_save
+    return checkpoint_file
 
 
-def train(config: GRAMTrainConfig):
+def train(
+    config: GRAMTrainConfig,
+    on_checkpoint: Optional[Callable[[int, int, Path], None]] = None,
+):
     torch.manual_seed(config.seed)
     device = select_device(config.device)
     checkpoint_path = Path(config.checkpoint_path)
@@ -248,6 +253,8 @@ def train(config: GRAMTrainConfig):
                     f.write(json.dumps(normalized) + "\n")
 
         if config.save_every_eval:
-            save_checkpoint(checkpoint_path, model, step, ema_helper)
+            checkpoint_file = save_checkpoint(checkpoint_path, model, step, ema_helper)
+            if on_checkpoint is not None:
+                on_checkpoint(iter_id * train_epochs_per_iter + train_epochs_per_iter, step, checkpoint_file)
 
     save_checkpoint(checkpoint_path, model, step, ema_helper)

@@ -21,6 +21,7 @@ GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-768}"
 DEVICE="${DEVICE:-cuda}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
+INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
 RUN_INFER="${RUN_INFER:-1}"
 INSTALL_ONLY="${INSTALL_ONLY:-0}"
 
@@ -63,14 +64,22 @@ python nqweens/build_dataset.py \
   --train-fraction 0.85 \
   --seed 0
 
-python nqweens/train_8x8.py \
+train_args=(
+  nqweens/train_8x8.py
   --data-path "$DATA_DIR" \
   --checkpoint-path "$CKPT_DIR" \
   --epochs "$EPOCHS" \
   --eval-interval "$EVAL_INTERVAL" \
   --global-batch-size "$GLOBAL_BATCH_SIZE" \
   --device "$DEVICE" \
-  --no-build-if-missing
+  --no-build-if-missing \
+  --infer-num-puzzles "$NUM_INFER_PUZZLES" \
+  --infer-num-samples "$NUM_SAMPLES"
+)
+if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
+  train_args+=(--no-infer-every-eval)
+fi
+python "${train_args[@]}"
 
 if [[ "$RUN_INFER" == "1" ]]; then
   python nqweens/infer_8x8.py \
