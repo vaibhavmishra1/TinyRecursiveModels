@@ -23,7 +23,7 @@ The training script uses the paper hyperparameters for 8x8 N-Queens:
 
 ## Commands
 
-Use the `brahma` conda environment:
+On the local machine, use the `brahma` conda environment:
 
 ```bash
 conda activate brahma
@@ -65,4 +65,30 @@ For a quick smoke run, lower the epoch count:
 
 ```bash
 PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/run_8x8_end_to_end.sh
+```
+
+## VM One-Shot Run
+
+On a CUDA VM, this script creates `.venv-nqweens`, installs PyTorch and the N-Queens dependencies, builds the dataset, trains, then runs inference:
+
+```bash
+bash nqweens/install_train_infer_8x8.sh
+```
+
+The script defaults to the PyTorch CUDA 12.6 wheel index. Override it if your VM image needs a different CUDA wheel:
+
+```bash
+TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 bash nqweens/install_train_infer_8x8.sh
+```
+
+Useful VM smoke run:
+
+```bash
+EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/install_train_infer_8x8.sh
+```
+
+Install dependencies only:
+
+```bash
+INSTALL_ONLY=1 bash nqweens/install_train_infer_8x8.sh
 ```
