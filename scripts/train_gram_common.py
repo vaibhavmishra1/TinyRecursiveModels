@@ -36,7 +36,7 @@ class GRAMTrainConfig:
 
     hidden_size: int = 512
     num_heads: int = 8
-    expansion: float = 4
+    expansion: float = 1
     H_layers: int = 2
     L_layers: int = 2
     T_steps: int = 3
@@ -163,9 +163,12 @@ def create_optimizers(config: GRAMTrainConfig, model: nn.Module):
     return optimizers, dense_params
 
 
-def save_checkpoint(path: Path, model: nn.Module, step: int):
+def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optional[EMAHelper] = None):
     path.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), path / f"step_{step}")
+    model_to_save = ema_helper.ema_copy(model) if ema_helper is not None else model
+    torch.save(model_to_save.state_dict(), path / f"step_{step}")
+    if model_to_save is not model:
+        del model_to_save
 
 
 def train(config: GRAMTrainConfig):
@@ -245,6 +248,6 @@ def train(config: GRAMTrainConfig):
                     f.write(json.dumps(normalized) + "\n")
 
         if config.save_every_eval:
-            save_checkpoint(checkpoint_path, model, step)
+            save_checkpoint(checkpoint_path, model, step, ema_helper)
 
-    save_checkpoint(checkpoint_path, model, step)
+    save_checkpoint(checkpoint_path, model, step, ema_helper)

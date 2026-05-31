@@ -11,11 +11,11 @@ The dataset follows Appendix C.2.1 of the GRAM paper:
 - Split 85:15 by unique input configuration to avoid input leakage.
 - Flatten each board row-major to length 64.
 - Vocabulary: `0=pad`, `1=empty`, `2=queen`.
-- No puzzle embeddings.
+- No learned puzzle embeddings; the model still prepends the paper's 16 zero-padded puzzle-token positions.
 
 The training script uses the paper hyperparameters for 8x8 N-Queens:
 
-- `D=512`, `heads=8`, `fL/fH=2` attention plus SwiGLU layers.
+- `D=512`, `Dh=512`, `heads=8`, `fL/fH=2` attention plus SwiGLU layers.
 - `K=4` low-level refinements and `T=3` high-level stochastic transitions.
 - `N_sup=16`, `beta=0.07`, KL balance `0.8`.
 - AdamW `lr=1e-4`, weight decay `1.0`, gradient clip `1.0`.
@@ -44,7 +44,7 @@ python nqweens/train_8x8.py \
   --checkpoint-path checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8
 ```
 
-Run inference and report validity plus coverage with 20 samples:
+Run inference with ACT halting and LPRM-ranked candidate selection, and report validity plus coverage with 20 samples:
 
 ```bash
 python nqweens/infer_8x8.py \
@@ -54,6 +54,8 @@ python nqweens/infer_8x8.py \
   --num-puzzles 100 \
   --num-samples 20
 ```
+
+To force fixed-depth 16-step sampling instead of ACT halting, add `--disable-act`.
 
 Or run everything:
 

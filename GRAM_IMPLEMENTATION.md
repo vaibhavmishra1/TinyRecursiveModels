@@ -5,8 +5,9 @@ This branch adds a paper-faithful implementation of **Generative Recursive Reaso
 Implemented details:
 
 - Latent state `z=(h,l)` with high-level `h` and low-level `l`.
-- Encoder with token embeddings, optional 16-token ARC puzzle embeddings, and RoPE/learned/no positional encodings.
+- Encoder with token embeddings, 16 fixed puzzle-token positions, optional learned ARC puzzle embeddings, zero-padded puzzle tokens for non-ARC tasks, and RoPE/learned/no positional encodings.
 - Separate recursive modules `fL` and `fH`, each configurable as `[Attention + SwiGLU] x 2`.
+- Paper FFN width `Dh=512` is represented by `expansion=1` in the local SwiGLU helper.
 - Sudoku option `mlp_t=True` for the paper's SwiGLU-only recursive-core exception.
 - Fixed learned checkpoint buffers for `h0,l0`, initialized once from `N(0,I)`.
 - Stochastic high-level guidance:
@@ -25,7 +26,8 @@ Implemented details:
   - ARC-AGI-1: `beta=0.04`
 - SwiGLU decoder MLP followed by LM projection.
 - ACT halt/continue Q head.
-- LPRM value head trained with final prediction accuracy targets.
+- ACT halt/continue Q head trained without propagating ACT gradients into the recursive core.
+- LPRM value head trained with final prediction accuracy targets and used to rank parallel inference samples.
 - Explicit training entrypoints:
   - `scripts/train_gram_sudoku_extreme.py`
   - `scripts/train_gram_arc_agi_1.py`
@@ -42,6 +44,7 @@ Paper hyperparameters included in the train files:
 | Gradient clipping | 1.0 | 1.0 |
 | EMA decay | 0.9999 | 0.9999 |
 | Hidden size | 512 | 512 |
+| FFN hidden size | 512 | 512 |
 | Attention heads | 8 | 8 |
 | `fL`, `fH` layers | 2 each | 2 each |
 | High-level transitions `T` | 3 | 3 |

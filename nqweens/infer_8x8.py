@@ -82,7 +82,8 @@ def _sample_model(
     inputs: np.ndarray,
     steps: int,
     device: torch.device,
-) -> np.ndarray:
+    use_act: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     batch = {
         "inputs": torch.from_numpy(inputs.astype(np.int32)).to(device),
         "puzzle_identifiers": torch.zeros((inputs.shape[0],), dtype=torch.int32, device=device),
@@ -95,12 +96,37 @@ def _sample_model(
     inner_carry = inner.reset_carry(reset, inner_carry)
 
     outputs = None
+    final_preds = None
+    final_scores = torch.full((inputs.shape[0],), -float("inf"), dtype=torch.float32, device=device)
+    halt_steps = torch.full((inputs.shape[0],), steps, dtype=torch.int32, device=device)
+    active = torch.ones((inputs.shape[0],), dtype=torch.bool, device=device)
+
     with torch.inference_mode():
-        for _ in range(steps):
+        for step in range(1, steps + 1):
             inner_carry, outputs = inner(inner_carry, batch)
+            preds = outputs["logits"].argmax(dim=-1)
+            scores = torch.sigmoid(outputs["v_logits"]).to(torch.float32)
+            halted = outputs["q_halt_logits"] > outputs["q_continue_logits"] if use_act else torch.zeros_like(active)
+            halted = halted | (step == steps)
+            newly_halted = active & halted
+
+            if final_preds is None:
+                final_preds = torch.empty_like(preds)
+            final_preds[newly_halted] = preds[newly_halted]
+            final_scores[newly_halted] = scores[newly_halted]
+            halt_steps[newly_halted] = step
+            active = active & ~newly_halted
+            if not active.any():
+                break
+
     if outputs is None:
         raise RuntimeError("Inference produced no outputs")
-    return outputs["logits"].argmax(dim=-1).detach().cpu().numpy().astype(np.uint8)
+    assert final_preds is not None
+    return (
+        final_preds.detach().cpu().numpy().astype(np.uint8),
+        final_scores.detach().cpu().numpy(),
+        halt_steps.detach().cpu().numpy(),
+    )
 
 
 def run_inference(args: argparse.Namespace) -> dict[str, Any]:
@@ -130,13 +156,21 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     total_samples = 0
     valid_samples = 0
     first_sample_valid = 0
+    lprm_ranked_valid = 0
+    lprm_ranked_target = 0
     coverage_values = []
     printed = 0
 
     for puzzle_index, instance in enumerate(instances):
         input_seq = np.asarray(instance["input"], dtype=np.uint8)
         inputs = np.repeat(input_seq[None, :], args.num_samples, axis=0)
-        preds = _sample_model(base_model, inputs, args.steps, device)
+        preds, lprm_scores, halt_steps = _sample_model(
+            base_model,
+            inputs,
+            args.steps,
+            device,
+            use_act=not args.disable_act,
+        )
 
         target_solutions = {tuple(int(x) for x in solution) for solution in instance["solutions"]}
         valid_solution_keys = []
@@ -149,6 +183,13 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         if is_valid_solution(preds[0], n=args.n, clues=input_seq):
             first_sample_valid += 1
 
+        best_idx = int(np.argmax(lprm_scores))
+        best_pred = preds[best_idx]
+        best_key = tuple(int(x) for x in best_pred)
+        best_is_valid = is_valid_solution(best_pred, n=args.n, clues=input_seq)
+        lprm_ranked_valid += int(best_is_valid)
+        lprm_ranked_target += int(best_key in target_solutions)
+
         unique_valid = set(valid_solution_keys)
         coverage = len(unique_valid) / max(len(target_solutions), 1)
         coverage_values.append(coverage)
@@ -159,8 +200,17 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
             print(f"\nPuzzle {puzzle_index} input:")
             print(board_to_text(input_seq, n=args.n))
             print(f"targets={len(target_solutions)} unique_valid_samples={len(unique_valid)} coverage={coverage:.3f}")
+            print(
+                f"lprm_best_sample={best_idx} score={float(lprm_scores[best_idx]):.4f} "
+                f"halt_step={int(halt_steps[best_idx])} valid={best_is_valid}"
+            )
+            print(board_to_text(best_pred, n=args.n))
             for sample_index, pred in enumerate(preds[: args.print_samples]):
-                print(f"\nSample {sample_index} valid={is_valid_solution(pred, n=args.n, clues=input_seq)} conflicts={conflicts(pred, n=args.n)}")
+                print(
+                    f"\nSample {sample_index} score={float(lprm_scores[sample_index]):.4f} "
+                    f"halt_step={int(halt_steps[sample_index])} "
+                    f"valid={is_valid_solution(pred, n=args.n, clues=input_seq)} conflicts={conflicts(pred, n=args.n)}"
+                )
                 print(board_to_text(pred, n=args.n))
 
     summary = {
@@ -169,8 +219,11 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         "num_puzzles": len(instances),
         "num_samples_per_puzzle": args.num_samples,
         "steps": args.steps,
+        "act_enabled": not args.disable_act,
         "sample_accuracy": valid_samples / max(total_samples, 1),
         "single_sample_accuracy": first_sample_valid / max(len(instances), 1),
+        "lprm_ranked_accuracy": lprm_ranked_valid / max(len(instances), 1),
+        "lprm_ranked_target_accuracy": lprm_ranked_target / max(len(instances), 1),
         "coverage_at_samples": float(np.mean(coverage_values)) if coverage_values else 0.0,
     }
     print("\n" + json.dumps(summary, indent=2))
@@ -187,6 +240,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-samples", type=int, default=20)
     parser.add_argument("--steps", type=int, default=16)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--disable-act", action="store_true")
     parser.add_argument("--print-puzzles", type=int, default=3)
     parser.add_argument("--print-samples", type=int, default=3)
     return parser.parse_args()

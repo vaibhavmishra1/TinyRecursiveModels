@@ -220,13 +220,23 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
     def _sequence_embeddings(self, tokens: torch.Tensor, puzzle_identifiers: torch.Tensor) -> torch.Tensor:
         embedding = self.embed_tokens(tokens.to(torch.int32))
 
-        if self.config.puzzle_emb_ndim > 0:
-            puzzle_embedding = self.puzzle_emb(puzzle_identifiers)
-            pad_count = self.puzzle_emb_len * self.config.hidden_size - puzzle_embedding.shape[-1]
-            if pad_count > 0:
-                puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
+        if self.puzzle_emb_len > 0:
+            if self.config.puzzle_emb_ndim > 0:
+                puzzle_embedding = self.puzzle_emb(puzzle_identifiers)
+                pad_count = self.puzzle_emb_len * self.config.hidden_size - puzzle_embedding.shape[-1]
+                if pad_count > 0:
+                    puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
+                puzzle_embedding = puzzle_embedding.view(-1, self.puzzle_emb_len, self.config.hidden_size)
+            else:
+                puzzle_embedding = torch.zeros(
+                    tokens.shape[0],
+                    self.puzzle_emb_len,
+                    self.config.hidden_size,
+                    dtype=self.forward_dtype,
+                    device=tokens.device,
+                )
             embedding = torch.cat(
-                (puzzle_embedding.view(-1, self.puzzle_emb_len, self.config.hidden_size), embedding),
+                (puzzle_embedding, embedding),
                 dim=-2,
             )
 
@@ -356,7 +366,7 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
         if self.decoder_mlp is not None:
             decoder_state = rms_norm(decoder_state + self.decoder_mlp(decoder_state), variance_epsilon=self.config.rms_norm_eps)
         logits = self.lm_head(decoder_state)[:, self.puzzle_emb_len :]
-        q_logits = self.q_head(h[:, 0]).to(torch.float32)
+        q_logits = self.q_head(h[:, 0].detach()).to(torch.float32)
 
         outputs = {
             "logits": logits,
@@ -385,7 +395,7 @@ class GenerativeRecursiveReasoningModel_ACTV1(nn.Module):
 
     @property
     def puzzle_emb(self):
-        return self.inner.puzzle_emb
+        return getattr(self.inner, "puzzle_emb", None)
 
     def initial_carry(self, batch: Dict[str, torch.Tensor]):
         batch_size = batch["inputs"].shape[0]

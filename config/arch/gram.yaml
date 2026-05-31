@@ -17,7 +17,7 @@ H_layers: 2
 L_layers: 2
 hidden_size: 512
 num_heads: 8
-expansion: 4
+expansion: 1
 
 puzzle_emb_ndim: 0
 puzzle_emb_len: 16

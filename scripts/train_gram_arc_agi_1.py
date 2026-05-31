@@ -8,7 +8,7 @@ from scripts.train_gram_common import GRAMTrainConfig, train
 
 def main():
     # GRAM paper Appendix B.1/B.2:
-    # D=512, 8 heads, two fL/fH blocks, T=3 high-level transitions,
+    # D=512, Dh=512, 8 heads, two fL/fH blocks, T=3 high-level transitions,
     # K=4 low-level refinements for ARC-AGI, N_sup=16, beta=0.04 for
     # ARC-AGI-1, KL balance=0.8, AdamW lr=1e-4, weight decay=1.0,
     # grad clip=1.0, global batch size=768, EMA decay=0.9999, 200K epochs.
@@ -28,7 +28,7 @@ def main():
         ema_rate=0.9999,
         hidden_size=512,
         num_heads=8,
-        expansion=4,
+        expansion=1,
         H_layers=2,
         L_layers=2,
         T_steps=3,
