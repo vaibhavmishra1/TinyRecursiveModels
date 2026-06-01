@@ -90,6 +90,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=1)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--disable-ema", dest="ema", action="store_false", default=True)
+    parser.add_argument("--ema-rate", type=float, default=0.9999)
     parser.add_argument("--load-checkpoint")
     parser.add_argument("--rebuild-data", action="store_true")
     parser.add_argument("--no-build-if-missing", action="store_true")
@@ -100,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--infer-steps", type=int, default=16)
     parser.add_argument("--infer-print-puzzles", type=int, default=0)
     parser.add_argument("--infer-print-samples", type=int, default=0)
+    parser.add_argument("--infer-raw-checkpoint", action="store_true")
     parser.add_argument("--infer-disable-act", dest="infer_disable_act", action="store_true", default=True)
     parser.add_argument("--infer-use-act", dest="infer_disable_act", action="store_false")
     parser.add_argument("--min-log-std", type=float, default=-10.0)
@@ -120,9 +123,14 @@ def make_inference_callback(args: argparse.Namespace):
         from nqweens.infer_8x8 import run_inference
 
         print(f"INFER epoch={epoch} step={step} checkpoint={checkpoint_file}", flush=True)
+        inference_checkpoint = checkpoint_file
+        raw_checkpoint = checkpoint_file.with_name(f"{checkpoint_file.name}_raw")
+        if args.infer_raw_checkpoint and raw_checkpoint.exists():
+            inference_checkpoint = raw_checkpoint
+            print(f"INFER using raw checkpoint={inference_checkpoint}", flush=True)
         summary = run_inference(
             argparse.Namespace(
-                checkpoint=str(checkpoint_file),
+                checkpoint=str(inference_checkpoint),
                 data_path=args.data_path,
                 split=args.infer_split,
                 n=8,

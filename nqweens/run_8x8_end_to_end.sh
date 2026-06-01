@@ -10,10 +10,13 @@ NUM_GPUS="${NUM_GPUS:-4}"
 GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-256}"
 DEVICE="${DEVICE:-cuda}"
 COMPILE="${COMPILE:-0}"
+EMA="${EMA:-1}"
+EMA_RATE="${EMA_RATE:-0.9999}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
 INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
 INFER_DISABLE_ACT="${INFER_DISABLE_ACT:-1}"
+INFER_RAW_CHECKPOINT="${INFER_RAW_CHECKPOINT:-0}"
 MIN_LOG_STD="${MIN_LOG_STD:--10.0}"
 MAX_LOG_STD="${MAX_LOG_STD:-0.0}"
 LPRM_DETACH_CORE="${LPRM_DETACH_CORE:-1}"
@@ -38,12 +41,19 @@ train_args=(
   --eval-interval "$EVAL_INTERVAL" \
   --global-batch-size "$GLOBAL_BATCH_SIZE" \
   --device "$DEVICE" \
+  --ema-rate "$EMA_RATE" \
   --no-build-if-missing \
   --infer-num-puzzles "$NUM_INFER_PUZZLES" \
   --infer-num-samples "$NUM_SAMPLES" \
   --min-log-std "$MIN_LOG_STD" \
   --max-log-std "$MAX_LOG_STD"
 )
+if [[ "$EMA" != "1" ]]; then
+  train_args+=(--disable-ema)
+fi
+if [[ "$INFER_RAW_CHECKPOINT" == "1" ]]; then
+  train_args+=(--infer-raw-checkpoint)
+fi
 if [[ "$LPRM_DETACH_CORE" == "1" ]]; then
   train_args+=(--lprm-detach-core)
 else

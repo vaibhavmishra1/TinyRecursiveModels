@@ -263,6 +263,8 @@ def create_optimizers(config: GRAMTrainConfig, model: nn.Module, world_size: int
 def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optional[EMAHelper] = None) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     checkpoint_file = path / f"step_{step}"
+    if ema_helper is not None:
+        torch.save(_state_dict_for_save(model), path / f"step_{step}_raw")
     model_to_save = ema_helper.ema_copy(model) if ema_helper is not None else model
     torch.save(_state_dict_for_save(model_to_save), checkpoint_file)
     if model_to_save is not model:
