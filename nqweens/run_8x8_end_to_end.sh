@@ -13,6 +13,7 @@ COMPILE="${COMPILE:-0}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
 INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
+INFER_DISABLE_ACT="${INFER_DISABLE_ACT:-0}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 if [[ "$COMPILE" == "1" ]]; then
@@ -41,6 +42,9 @@ train_args=(
 if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
   train_args+=(--no-infer-every-eval)
 fi
+if [[ "$INFER_DISABLE_ACT" == "1" ]]; then
+  train_args+=(--infer-disable-act)
+fi
 if [[ "$COMPILE" == "1" ]]; then
   train_args+=(--compile)
 fi
@@ -54,11 +58,17 @@ else
   "$PYTHON" "${train_args[@]}"
 fi
 
-"$PYTHON" nqweens/infer_8x8.py \
-  --checkpoint "$CKPT_DIR" \
-  --data-path "$DATA_DIR" \
-  --split test \
-  --num-puzzles "$NUM_INFER_PUZZLES" \
-  --num-samples "$NUM_SAMPLES" \
-  --steps 16 \
+infer_args=(
+  nqweens/infer_8x8.py
+  --checkpoint "$CKPT_DIR"
+  --data-path "$DATA_DIR"
+  --split test
+  --num-puzzles "$NUM_INFER_PUZZLES"
+  --num-samples "$NUM_SAMPLES"
+  --steps 16
   --device "$DEVICE"
+)
+if [[ "$INFER_DISABLE_ACT" == "1" ]]; then
+  infer_args+=(--disable-act)
+fi
+"$PYTHON" "${infer_args[@]}"

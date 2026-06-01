@@ -159,6 +159,14 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
     lprm_ranked_valid = 0
     lprm_ranked_target = 0
     coverage_values = []
+    queen_counts = []
+    conflict_counts = []
+    clue_violation_counts = []
+    halt_step_values = []
+    lprm_score_values = []
+    valid_queen_count = 0
+    clue_consistent = 0
+    conflict_free = 0
     printed = 0
 
     for puzzle_index, instance in enumerate(instances):
@@ -175,11 +183,23 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         target_solutions = {tuple(int(x) for x in solution) for solution in instance["solutions"]}
         valid_solution_keys = []
         for pred in preds:
+            queen_count = int((pred == 2).sum())
+            clue_violations = int(((input_seq == 2) & (pred != 2)).sum())
+            conflict_count = conflicts(pred, n=args.n)
+            queen_counts.append(queen_count)
+            clue_violation_counts.append(clue_violations)
+            conflict_counts.append(conflict_count)
+            valid_queen_count += int(queen_count == args.n)
+            clue_consistent += int(clue_violations == 0)
+            conflict_free += int(conflict_count == 0)
+
             pred_key = tuple(int(x) for x in pred)
             if is_valid_solution(pred, n=args.n, clues=input_seq):
                 valid_samples += 1
                 if pred_key in target_solutions:
                     valid_solution_keys.append(pred_key)
+        halt_step_values.extend(int(x) for x in halt_steps)
+        lprm_score_values.extend(float(x) for x in lprm_scores)
         if is_valid_solution(preds[0], n=args.n, clues=input_seq):
             first_sample_valid += 1
 
@@ -225,6 +245,16 @@ def run_inference(args: argparse.Namespace) -> dict[str, Any]:
         "lprm_ranked_accuracy": lprm_ranked_valid / max(len(instances), 1),
         "lprm_ranked_target_accuracy": lprm_ranked_target / max(len(instances), 1),
         "coverage_at_samples": float(np.mean(coverage_values)) if coverage_values else 0.0,
+        "queen_count_mean": float(np.mean(queen_counts)) if queen_counts else 0.0,
+        "queen_count_std": float(np.std(queen_counts)) if queen_counts else 0.0,
+        "valid_queen_count_rate": valid_queen_count / max(total_samples, 1),
+        "clue_consistent_rate": clue_consistent / max(total_samples, 1),
+        "clue_violations_mean": float(np.mean(clue_violation_counts)) if clue_violation_counts else 0.0,
+        "conflict_free_rate": conflict_free / max(total_samples, 1),
+        "conflicts_mean": float(np.mean(conflict_counts)) if conflict_counts else 0.0,
+        "halt_step_mean": float(np.mean(halt_step_values)) if halt_step_values else 0.0,
+        "lprm_score_mean": float(np.mean(lprm_score_values)) if lprm_score_values else 0.0,
+        "lprm_score_std": float(np.std(lprm_score_values)) if lprm_score_values else 0.0,
     }
     print("\n" + json.dumps(summary, indent=2))
     return summary

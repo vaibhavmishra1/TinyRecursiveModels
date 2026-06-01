@@ -148,9 +148,14 @@ def gaussian_kl_diag(
     p_log_std: torch.Tensor,
     reduction: str = "mean",
 ) -> torch.Tensor:
+    q_mu = q_mu.to(torch.float32)
+    q_log_std = q_log_std.to(torch.float32)
+    p_mu = p_mu.to(torch.float32)
+    p_log_std = p_log_std.to(torch.float32)
     q_var = torch.exp(2.0 * q_log_std)
     p_var = torch.exp(2.0 * p_log_std)
     kl = p_log_std - q_log_std + (q_var + (q_mu - p_mu).square()) / (2.0 * p_var.clamp_min(1e-12)) - 0.5
+    kl = kl.clamp_min(0)
     if reduction == "sum":
         return kl.flatten(1).sum(-1)
     if reduction == "mean":
