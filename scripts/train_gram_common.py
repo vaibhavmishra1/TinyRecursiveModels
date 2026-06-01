@@ -2,9 +2,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 import json
+import os
 import time
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -13,6 +15,18 @@ from models.losses import GRAMLossHead
 from models.recursive_reasoning.gram import GenerativeRecursiveReasoningModel_ACTV1
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig
+
+
+@dataclass
+class DistributedContext:
+    rank: int = 0
+    world_size: int = 1
+    local_rank: int = 0
+    enabled: bool = False
+
+    @property
+    def is_main(self) -> bool:
+        return self.rank == 0
 
 
 @dataclass
@@ -65,7 +79,37 @@ class GRAMTrainConfig:
     load_checkpoint: Optional[str] = None
 
 
-def select_device(name: str) -> torch.device:
+def init_distributed() -> DistributedContext:
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return DistributedContext(local_rank=int(os.environ.get("LOCAL_RANK", "0")))
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Distributed GRAM training uses NCCL and requires CUDA.")
+
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", str(rank % torch.cuda.device_count())))
+    torch.cuda.set_device(local_rank)
+    return DistributedContext(rank=rank, world_size=world_size, local_rank=local_rank, enabled=True)
+
+
+def finalize_distributed(context: DistributedContext) -> None:
+    if context.enabled and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def barrier(context: DistributedContext) -> None:
+    if context.enabled:
+        dist.barrier()
+
+
+def select_device(name: str, context: Optional[DistributedContext] = None) -> torch.device:
+    if context is not None and context.enabled:
+        return torch.device("cuda", context.local_rank)
     if name != "auto":
         return torch.device(name)
     if torch.cuda.is_available():
@@ -75,7 +119,7 @@ def select_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
-def create_loader(config: GRAMTrainConfig, split: str, epochs_per_iter: int):
+def create_loader(config: GRAMTrainConfig, split: str, epochs_per_iter: int, rank: int = 0, world_size: int = 1):
     dataset = PuzzleDataset(
         PuzzleDatasetConfig(
             seed=config.seed,
@@ -83,8 +127,8 @@ def create_loader(config: GRAMTrainConfig, split: str, epochs_per_iter: int):
             global_batch_size=config.global_batch_size,
             test_set_mode=(split == "test"),
             epochs_per_iter=epochs_per_iter,
-            rank=0,
-            num_replicas=1,
+            rank=rank,
+            num_replicas=world_size,
         ),
         split=split,
     )
@@ -99,9 +143,28 @@ def create_loader(config: GRAMTrainConfig, split: str, epochs_per_iter: int):
     return loader, dataset.metadata
 
 
-def build_model(config: GRAMTrainConfig, metadata, device: torch.device):
+def _strip_compile_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    if not any(k.startswith("_orig_mod.") for k in state_dict):
+        return state_dict
+    return {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+
+
+def _unwrap_compiled(model: nn.Module) -> nn.Module:
+    return getattr(model, "_orig_mod", model)
+
+
+def _broadcast_model_state(model: nn.Module) -> None:
+    with torch.no_grad():
+        for tensor in list(model.parameters()) + list(model.buffers()):
+            dist.broadcast(tensor, src=0)
+
+
+def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: int = 0, world_size: int = 1):
+    if config.global_batch_size % world_size != 0:
+        raise ValueError(f"global_batch_size={config.global_batch_size} must be divisible by world_size={world_size}")
+
     model_cfg = {
-        "batch_size": config.global_batch_size,
+        "batch_size": config.global_batch_size // world_size,
         "seq_len": metadata.seq_len,
         "puzzle_emb_ndim": config.puzzle_emb_ndim,
         "num_puzzle_identifiers": metadata.num_puzzle_identifiers,
@@ -134,22 +197,27 @@ def build_model(config: GRAMTrainConfig, metadata, device: torch.device):
     )
     loss_model.to(device)
 
-    if config.load_checkpoint:
+    if config.load_checkpoint and rank == 0:
         state = torch.load(config.load_checkpoint, map_location=device)
+        state = _strip_compile_prefix(state)
         loss_model.load_state_dict(state, strict=False)
+
+    if world_size > 1:
+        _broadcast_model_state(loss_model)
 
     if config.compile and device.type == "cuda":
         loss_model = torch.compile(loss_model)  # type: ignore[assignment]
     return loss_model
 
 
-def create_optimizers(config: GRAMTrainConfig, model: nn.Module):
+def create_optimizers(config: GRAMTrainConfig, model: nn.Module, world_size: int = 1):
     dense_params = [p for p in model.parameters() if p.requires_grad]
     optimizers = [torch.optim.AdamW(dense_params, lr=config.lr, weight_decay=config.weight_decay)]
 
     # ARC puzzle embeddings are intentionally sparse and very large. The existing
     # RRM codebase stores them as buffers and updates only touched rows.
-    puzzle_emb = getattr(getattr(model, "model", model), "puzzle_emb", None)
+    model_for_attrs = _unwrap_compiled(model)
+    puzzle_emb = getattr(getattr(model_for_attrs, "model", model_for_attrs), "puzzle_emb", None)
     if config.puzzle_emb_ndim > 0 and puzzle_emb is not None:
         optimizers.insert(
             0,
@@ -157,7 +225,7 @@ def create_optimizers(config: GRAMTrainConfig, model: nn.Module):
                 puzzle_emb.buffers(),
                 lr=config.puzzle_emb_lr,
                 weight_decay=config.puzzle_emb_weight_decay,
-                world_size=1,
+                world_size=world_size,
             ),
         )
     return optimizers, dense_params
@@ -167,94 +235,152 @@ def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optiona
     path.mkdir(parents=True, exist_ok=True)
     checkpoint_file = path / f"step_{step}"
     model_to_save = ema_helper.ema_copy(model) if ema_helper is not None else model
-    torch.save(model_to_save.state_dict(), checkpoint_file)
+    torch.save(_unwrap_compiled(model_to_save).state_dict(), checkpoint_file)
     if model_to_save is not model:
         del model_to_save
     return checkpoint_file
+
+
+def _all_reduce_gradients(params: List[torch.Tensor], context: DistributedContext) -> None:
+    if not context.enabled:
+        return
+    for param in params:
+        if param.grad is not None:
+            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+
+
+def _reduce_metrics(metrics: dict[str, torch.Tensor], context: DistributedContext) -> Optional[dict[str, float]]:
+    if not metrics:
+        return {}
+
+    metric_keys = sorted(metrics.keys())
+    metric_values = torch.stack([metrics[k].detach().to(torch.float32) for k in metric_keys])
+    if context.enabled:
+        dist.reduce(metric_values, dst=0, op=dist.ReduceOp.SUM)
+    if not context.is_main:
+        return None
+    return {k: float(metric_values[i].cpu()) for i, k in enumerate(metric_keys)}
+
+
+def _reduce_scalar(value: torch.Tensor, context: DistributedContext) -> Optional[float]:
+    value = value.detach().to(torch.float32)
+    if context.enabled:
+        dist.reduce(value, dst=0, op=dist.ReduceOp.SUM)
+    if not context.is_main:
+        return None
+    return float(value.cpu())
 
 
 def train(
     config: GRAMTrainConfig,
     on_checkpoint: Optional[Callable[[int, int, Path], None]] = None,
 ):
-    torch.manual_seed(config.seed)
-    device = select_device(config.device)
-    checkpoint_path = Path(config.checkpoint_path)
-    checkpoint_path.mkdir(parents=True, exist_ok=True)
-    with (checkpoint_path / "gram_train_config.json").open("w") as f:
-        json.dump(asdict(config), f, indent=2)
+    context = init_distributed()
+    try:
+        torch.manual_seed(config.seed + context.rank)
+        device = select_device(config.device, context)
+        checkpoint_path = Path(config.checkpoint_path)
+        if context.is_main:
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+            with (checkpoint_path / "gram_train_config.json").open("w") as f:
+                json.dump(asdict(config), f, indent=2)
+        barrier(context)
 
-    train_epochs_per_iter = config.eval_interval if config.eval_interval else config.epochs
-    total_iters = config.epochs // train_epochs_per_iter
-    if config.epochs % train_epochs_per_iter != 0:
-        raise ValueError("eval_interval must divide epochs")
+        train_epochs_per_iter = config.eval_interval if config.eval_interval else config.epochs
+        total_iters = config.epochs // train_epochs_per_iter
+        if config.epochs % train_epochs_per_iter != 0:
+            raise ValueError("eval_interval must divide epochs")
 
-    train_loader, train_metadata = create_loader(config, "train", train_epochs_per_iter)
-    model = build_model(config, train_metadata, device)
-    optimizers, dense_params = create_optimizers(config, model)
+        train_loader, train_metadata = create_loader(
+            config,
+            "train",
+            train_epochs_per_iter,
+            rank=context.rank,
+            world_size=context.world_size,
+        )
+        model = build_model(config, train_metadata, device, rank=context.rank, world_size=context.world_size)
+        optimizers, dense_params = create_optimizers(config, model, world_size=context.world_size)
 
-    ema_helper = None
-    if config.ema:
-        ema_helper = EMAHelper(mu=config.ema_rate)
-        ema_helper.register(model)
+        ema_helper = None
+        if config.ema:
+            ema_helper = EMAHelper(mu=config.ema_rate)
+            ema_helper.register(model)
 
-    total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
-    step = 0
-    log_path = checkpoint_path / "train_metrics.jsonl"
-    started = time.time()
+        total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
+        step = 0
+        log_path = checkpoint_path / "train_metrics.jsonl"
+        started = time.time()
 
-    print(f"device={device}")
-    print(f"total_steps={total_steps}")
-    print(f"metadata={train_metadata}")
+        if context.is_main:
+            local_batch_size = config.global_batch_size // context.world_size
+            print(f"device={device}")
+            print(f"world_size={context.world_size}")
+            print(f"global_batch_size={config.global_batch_size}")
+            print(f"local_batch_size={local_batch_size}")
+            print(f"total_steps={total_steps}")
+            print(f"metadata={train_metadata}")
 
-    for iter_id in range(total_iters):
-        print(f"epoch={iter_id * train_epochs_per_iter}")
-        model.train()
-        carry = None
+        for iter_id in range(total_iters):
+            if context.is_main:
+                print(f"epoch={iter_id * train_epochs_per_iter}")
+            model.train()
+            carry = None
 
-        for _set_name, batch, global_batch_size in train_loader:
-            step += 1
-            if step > total_steps:
-                break
+            for _set_name, batch, global_batch_size in train_loader:
+                step += 1
+                if step > total_steps:
+                    break
 
-            batch = {k: v.to(device) for k, v in batch.items()}
-            if carry is None:
-                with torch.device(device):
-                    carry = model.initial_carry(batch)  # type: ignore[attr-defined]
+                batch = {k: v.to(device, non_blocking=(device.type == "cuda")) for k, v in batch.items()}
+                if carry is None:
+                    with torch.device(device):
+                        carry = model.initial_carry(batch)  # type: ignore[attr-defined]
 
-            carry, loss, metrics, _outputs, _finished = model(carry=carry, batch=batch, return_keys=[])
-            (loss / global_batch_size).backward()
+                carry, loss, metrics, _outputs, _finished = model(carry=carry, batch=batch, return_keys=[])
+                (loss / global_batch_size).backward()
 
-            if config.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(dense_params, config.grad_clip)
+                _all_reduce_gradients(dense_params, context)
 
-            for optim in optimizers:
-                optim.step()
-                optim.zero_grad(set_to_none=True)
+                if config.grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(dense_params, config.grad_clip)
 
-            if ema_helper is not None:
-                ema_helper.update(model)
+                for optim in optimizers:
+                    optim.step()
+                    optim.zero_grad(set_to_none=True)
 
-            if step % config.log_every == 0:
-                elapsed = time.time() - started
-                reduced = {k: float(v.detach().cpu()) for k, v in metrics.items()}
-                count = max(reduced.pop("count", 1.0), 1.0)
-                normalized = {}
-                for k, v in reduced.items():
-                    if k.endswith("loss"):
-                        normalized[k] = v / global_batch_size
-                    elif k in {"accuracy", "exact_accuracy", "q_halt_accuracy", "steps"}:
-                        normalized[k] = v / count
-                    else:
-                        normalized[k] = v
-                normalized.update({"step": step, "elapsed_seconds": elapsed, "loss": float(loss.detach().cpu()) / global_batch_size})
-                print(normalized, flush=True)
-                with log_path.open("a") as f:
-                    f.write(json.dumps(normalized) + "\n")
+                if ema_helper is not None:
+                    ema_helper.update(model)
 
-        if config.save_every_eval:
-            checkpoint_file = save_checkpoint(checkpoint_path, model, step, ema_helper)
-            if on_checkpoint is not None:
-                on_checkpoint(iter_id * train_epochs_per_iter + train_epochs_per_iter, step, checkpoint_file)
+                if step % config.log_every == 0:
+                    reduced = _reduce_metrics(metrics, context)
+                    reduced_loss = _reduce_scalar(loss, context)
+                    if context.is_main and reduced is not None and reduced_loss is not None:
+                        elapsed = time.time() - started
+                        count = max(reduced.pop("count", 1.0), 1.0)
+                        normalized = {}
+                        for k, v in reduced.items():
+                            if k.endswith("loss"):
+                                normalized[k] = v / global_batch_size
+                            elif k in {"accuracy", "exact_accuracy", "q_halt_accuracy", "steps"}:
+                                normalized[k] = v / count
+                            elif k in {"prior_std", "sample_std"}:
+                                normalized[k] = v / context.world_size
+                            else:
+                                normalized[k] = v
+                        normalized.update({"step": step, "elapsed_seconds": elapsed, "loss": reduced_loss / global_batch_size})
+                        print(normalized, flush=True)
+                        with log_path.open("a") as f:
+                            f.write(json.dumps(normalized) + "\n")
 
-    save_checkpoint(checkpoint_path, model, step, ema_helper)
+            if config.save_every_eval:
+                if context.is_main:
+                    checkpoint_file = save_checkpoint(checkpoint_path, model, step, ema_helper)
+                    if on_checkpoint is not None:
+                        on_checkpoint(iter_id * train_epochs_per_iter + train_epochs_per_iter, step, checkpoint_file)
+                barrier(context)
+
+        if context.is_main:
+            save_checkpoint(checkpoint_path, model, step, ema_helper)
+        barrier(context)
+    finally:
+        finalize_distributed(context)

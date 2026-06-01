@@ -19,7 +19,8 @@ The training script uses the paper hyperparameters for 8x8 N-Queens:
 - `K=4` low-level refinements and `T=3` high-level stochastic transitions.
 - `N_sup=16`, `beta=0.07`, KL balance `0.8`.
 - AdamW `lr=1e-4`, weight decay `1.0`, gradient clip `1.0`.
-- Global batch size `768`, EMA `0.9999`, epochs `3000`.
+- Paper global batch size `768`, EMA `0.9999`, epochs `3000`.
+- For 4x RTX 4090 24 GB, the launch scripts default to `GLOBAL_BATCH_SIZE=384`, giving the same per-GPU local batch size of `96` that the paper's 8x4090 setup uses.
 
 ## Commands
 
@@ -36,12 +37,14 @@ Build the dataset:
 python nqweens/build_dataset.py --output-dir nqweens/data/nqueens-8x8
 ```
 
-Train:
+Train on 4x RTX 4090:
 
 ```bash
-python nqweens/train_8x8.py \
+torchrun --standalone --nnodes 1 --nproc-per-node 4 nqweens/train_8x8.py \
   --data-path nqweens/data/nqueens-8x8 \
-  --checkpoint-path checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8
+  --checkpoint-path checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8 \
+  --global-batch-size 384 \
+  --device cuda
 ```
 
 By default, training saves an EMA checkpoint and runs N-Queens inference after every `--eval-interval` epochs. With the default `--eval-interval 300`, this produces `nqweens_eval_metrics.jsonl` in the checkpoint directory every 300 epochs. Add `--no-infer-every-eval` to disable periodic inference.
@@ -62,13 +65,13 @@ To force fixed-depth 16-step sampling instead of ACT halting, add `--disable-act
 Or run everything:
 
 ```bash
-PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python bash nqweens/run_8x8_end_to_end.sh
+PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python NUM_GPUS=4 GLOBAL_BATCH_SIZE=384 bash nqweens/run_8x8_end_to_end.sh
 ```
 
 For a quick smoke run, lower the epoch count:
 
 ```bash
-PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/run_8x8_end_to_end.sh
+PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python NUM_GPUS=1 EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/run_8x8_end_to_end.sh
 ```
 
 ## VM One-Shot Run
@@ -76,19 +79,19 @@ PYTHON=/Users/vaibhav/miniconda3/envs/brahma/bin/python EPOCHS=1 EVAL_INTERVAL=1
 On a CUDA VM, this script creates `.venv-nqweens`, installs PyTorch and the N-Queens dependencies, builds the dataset, trains, then runs inference:
 
 ```bash
-bash nqweens/install_train_infer_8x8.sh
+NUM_GPUS=4 GLOBAL_BATCH_SIZE=384 bash nqweens/install_train_infer_8x8.sh
 ```
 
 The script defaults to the PyTorch CUDA 12.6 wheel index. Override it if your VM image needs a different CUDA wheel:
 
 ```bash
-TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 bash nqweens/install_train_infer_8x8.sh
+NUM_GPUS=4 GLOBAL_BATCH_SIZE=384 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 bash nqweens/install_train_infer_8x8.sh
 ```
 
 Useful VM smoke run:
 
 ```bash
-EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/install_train_infer_8x8.sh
+NUM_GPUS=1 EPOCHS=1 EVAL_INTERVAL=1 GLOBAL_BATCH_SIZE=64 NUM_INFER_PUZZLES=2 bash nqweens/install_train_infer_8x8.sh
 ```
 
 Disable periodic inference during training:

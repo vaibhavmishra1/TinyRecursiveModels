@@ -17,7 +17,8 @@ DATA_DIR="${DATA_DIR:-nqweens/data/nqueens-8x8}"
 CKPT_DIR="${CKPT_DIR:-checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8}"
 EPOCHS="${EPOCHS:-3000}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-300}"
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-768}"
+NUM_GPUS="${NUM_GPUS:-4}"
+GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-384}"
 DEVICE="${DEVICE:-cuda}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
@@ -50,7 +51,9 @@ print(f"torch={torch.__version__}")
 print(f"cuda_available={torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"cuda_version={torch.version.cuda}")
-    print(f"gpu={torch.cuda.get_device_name(0)}")
+    print(f"gpu_count={torch.cuda.device_count()}")
+    for i in range(torch.cuda.device_count()):
+        print(f"gpu[{i}]={torch.cuda.get_device_name(i)}")
 PY
 
 if [[ "$INSTALL_ONLY" == "1" ]]; then
@@ -79,7 +82,15 @@ train_args=(
 if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
   train_args+=(--no-infer-every-eval)
 fi
-python "${train_args[@]}"
+if [[ "$NUM_GPUS" -gt 1 ]]; then
+  python -m torch.distributed.run \
+    --standalone \
+    --nnodes 1 \
+    --nproc-per-node "$NUM_GPUS" \
+    "${train_args[@]}"
+else
+  python "${train_args[@]}"
+fi
 
 if [[ "$RUN_INFER" == "1" ]]; then
   python nqweens/infer_8x8.py \

@@ -6,8 +6,9 @@ DATA_DIR="${DATA_DIR:-nqweens/data/nqueens-8x8}"
 CKPT_DIR="${CKPT_DIR:-checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8}"
 EPOCHS="${EPOCHS:-3000}"
 EVAL_INTERVAL="${EVAL_INTERVAL:-300}"
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-768}"
-DEVICE="${DEVICE:-auto}"
+NUM_GPUS="${NUM_GPUS:-4}"
+GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-384}"
+DEVICE="${DEVICE:-cuda}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
 INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
@@ -34,7 +35,15 @@ train_args=(
 if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
   train_args+=(--no-infer-every-eval)
 fi
-"$PYTHON" "${train_args[@]}"
+if [[ "$NUM_GPUS" -gt 1 ]]; then
+  "$PYTHON" -m torch.distributed.run \
+    --standalone \
+    --nnodes 1 \
+    --nproc-per-node "$NUM_GPUS" \
+    "${train_args[@]}"
+else
+  "$PYTHON" "${train_args[@]}"
+fi
 
 "$PYTHON" nqweens/infer_8x8.py \
   --checkpoint "$CKPT_DIR" \
