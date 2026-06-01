@@ -277,6 +277,10 @@ def train(
 ):
     context = init_distributed()
     try:
+        torch.set_float32_matmul_precision("high")
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(config.seed + context.rank)
         device = select_device(config.device, context)
         checkpoint_path = Path(config.checkpoint_path)
