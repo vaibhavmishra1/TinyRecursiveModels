@@ -25,6 +25,9 @@ NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
 INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
 INFER_DISABLE_ACT="${INFER_DISABLE_ACT:-1}"
+MIN_LOG_STD="${MIN_LOG_STD:--10.0}"
+MAX_LOG_STD="${MAX_LOG_STD:-0.0}"
+LPRM_DETACH_CORE="${LPRM_DETACH_CORE:-1}"
 RUN_INFER="${RUN_INFER:-1}"
 INSTALL_ONLY="${INSTALL_ONLY:-0}"
 
@@ -84,8 +87,15 @@ train_args=(
   --device "$DEVICE" \
   --no-build-if-missing \
   --infer-num-puzzles "$NUM_INFER_PUZZLES" \
-  --infer-num-samples "$NUM_SAMPLES"
+  --infer-num-samples "$NUM_SAMPLES" \
+  --min-log-std "$MIN_LOG_STD" \
+  --max-log-std "$MAX_LOG_STD"
 )
+if [[ "$LPRM_DETACH_CORE" == "1" ]]; then
+  train_args+=(--lprm-detach-core)
+else
+  train_args+=(--lprm-train-core)
+fi
 if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
   train_args+=(--no-infer-every-eval)
 fi

@@ -67,6 +67,7 @@ class GenerativeRecursiveReasoningModelConfig(BaseModel):
     # Stochastic guidance.
     min_log_std: float = -10.0
     max_log_std: float = 2.0
+    detach_lprm_core: bool = False
     posterior_target_conditioning: str = "add"
     decoder_swiglu: bool = True
 
@@ -280,6 +281,12 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
         log_std = self.posterior_log_std(x).clamp(self.config.min_log_std, self.config.max_log_std)
         return mu, log_std
 
+    def _value_logits(self, h: torch.Tensor) -> torch.Tensor:
+        value_state = h[:, 0]
+        if self.config.detach_lprm_core:
+            value_state = value_state.detach()
+        return self.v_head(value_state).squeeze(-1).to(torch.float32)
+
     def _sample_transition(
         self,
         h: torch.Tensor,
@@ -311,7 +318,7 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
             "prior_log_std": p_log_std,
             "sample_mu": sample_mu,
             "sample_log_std": sample_log_std,
-            "v_logits": self.v_head(h[:, 0]).squeeze(-1).to(torch.float32),
+            "v_logits": self._value_logits(h),
         }
         if q_mu is not None and q_log_std is not None:
             info.update(
@@ -354,7 +361,7 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
                 early_h_states.append(h.detach())
 
         transition_v_logits = [
-            self.v_head(state[:, 0]).squeeze(-1).to(torch.float32)
+            self._value_logits(state)
             for state in early_h_states
         ]
 
@@ -382,6 +389,10 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
             "transition_v_logits": transition_v_logits,
             "prior_std": torch.exp(final_info["prior_log_std"]).detach().to(torch.float32).mean(),
             "sample_std": torch.exp(final_info["sample_log_std"]).detach().to(torch.float32).mean(),
+            "prior_log_std_mean": final_info["prior_log_std"].detach().to(torch.float32).mean(),
+            "prior_log_std_max": final_info["prior_log_std"].detach().to(torch.float32).max(),
+            "sample_log_std_mean": final_info["sample_log_std"].detach().to(torch.float32).mean(),
+            "sample_log_std_max": final_info["sample_log_std"].detach().to(torch.float32).max(),
         }
         for key in ("kl", "kl_prior_grad", "kl_posterior_grad"):
             if key in final_info:

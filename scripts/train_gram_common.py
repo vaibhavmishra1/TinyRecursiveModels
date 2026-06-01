@@ -63,6 +63,9 @@ class GRAMTrainConfig:
     forward_dtype: str = "bfloat16"
     mlp_t: bool = False
     decoder_swiglu: bool = True
+    min_log_std: float = -10.0
+    max_log_std: float = 2.0
+    detach_lprm_core: bool = False
 
     beta: float = 0.1
     kl_balance: float = 0.8
@@ -204,6 +207,9 @@ def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: i
         "puzzle_emb_len": config.puzzle_emb_len,
         "mlp_t": config.mlp_t,
         "decoder_swiglu": config.decoder_swiglu,
+        "min_log_std": config.min_log_std,
+        "max_log_std": config.max_log_std,
+        "detach_lprm_core": config.detach_lprm_core,
     }
     model = GenerativeRecursiveReasoningModel_ACTV1(model_cfg)
     loss_model = GRAMLossHead(
@@ -402,7 +408,14 @@ def train(
                                 "prior_clue_violations",
                             }:
                                 normalized[k] = v / count
-                            elif k in {"prior_std", "sample_std"}:
+                            elif k in {
+                                "prior_std",
+                                "sample_std",
+                                "prior_log_std_mean",
+                                "prior_log_std_max",
+                                "sample_log_std_mean",
+                                "sample_log_std_max",
+                            }:
                                 normalized[k] = v / context.world_size
                             else:
                                 normalized[k] = v

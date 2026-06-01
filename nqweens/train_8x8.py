@@ -52,6 +52,9 @@ def make_config(args: argparse.Namespace | None = None) -> GRAMTrainConfig:
         forward_dtype=get("forward_dtype", "bfloat16"),
         mlp_t=get("mlp_t", False),
         decoder_swiglu=get("decoder_swiglu", True),
+        min_log_std=get("min_log_std", -10.0),
+        max_log_std=get("max_log_std", 0.0),
+        detach_lprm_core=get("detach_lprm_core", True),
         beta=get("beta", 0.07),
         kl_balance=get("kl_balance", 0.8),
         act_loss_weight=get("act_loss_weight", 1.0),
@@ -99,6 +102,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--infer-print-samples", type=int, default=0)
     parser.add_argument("--infer-disable-act", dest="infer_disable_act", action="store_true", default=True)
     parser.add_argument("--infer-use-act", dest="infer_disable_act", action="store_false")
+    parser.add_argument("--min-log-std", type=float, default=-10.0)
+    parser.add_argument("--max-log-std", type=float, default=0.0)
+    parser.add_argument("--lprm-detach-core", dest="detach_lprm_core", action="store_true", default=True)
+    parser.add_argument("--lprm-train-core", dest="detach_lprm_core", action="store_false")
     parser.add_argument("--lprm-reward-type", choices=["token_accuracy", "nqueens"], default="nqueens")
     parser.add_argument("--prior-lprm-loss-weight", type=float, default=1.0)
     parser.add_argument("--prior-aux-loss-weight", type=float, default=0.0)

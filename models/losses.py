@@ -282,6 +282,10 @@ class GRAMLossHead(nn.Module):
                 "steps": torch.where(valid_metrics, carry.steps, 0).sum(),
                 "prior_std": outputs["prior_std"].to(torch.float32).mean(),
                 "sample_std": outputs["sample_std"].to(torch.float32).mean(),
+                "prior_log_std_mean": outputs["prior_log_std_mean"].to(torch.float32).mean(),
+                "prior_log_std_max": outputs["prior_log_std_max"].to(torch.float32).mean(),
+                "sample_log_std_mean": outputs["sample_log_std_mean"].to(torch.float32).mean(),
+                "sample_log_std_max": outputs["sample_log_std_max"].to(torch.float32).mean(),
             }
             if prior_stats is not None:
                 metrics.update(
