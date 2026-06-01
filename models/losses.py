@@ -167,9 +167,7 @@ class GRAMLossHead(nn.Module):
             lprm_loss = lprm_loss + F.mse_loss(v_pred, reward.to(v_pred.dtype), reduction="sum")
 
         halt_target = seq_is_correct.to(outputs["q_halt_logits"].dtype).detach()
-        continue_target = outputs.get("target_q_continue_logits", halt_target).to(outputs["q_continue_logits"].dtype).detach()
         act_loss = F.mse_loss(outputs["q_halt_logits"], halt_target, reduction="sum")
-        act_loss = act_loss + F.mse_loss(outputs["q_continue_logits"], continue_target, reduction="sum")
 
         total_loss = recon_loss + self.beta * kl_loss + self.act_loss_weight * act_loss + self.lprm_loss_weight * lprm_loss
 

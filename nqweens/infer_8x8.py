@@ -106,7 +106,7 @@ def _sample_model(
             inner_carry, outputs = inner(inner_carry, batch)
             preds = outputs["logits"].argmax(dim=-1)
             scores = torch.sigmoid(outputs["v_logits"]).to(torch.float32)
-            halted = outputs["q_halt_logits"] > outputs["q_continue_logits"] if use_act else torch.zeros_like(active)
+            halted = outputs["q_halt_logits"] > 0 if use_act else torch.zeros_like(active)
             halted = halted | (step == steps)
             newly_halted = active & halted
 
