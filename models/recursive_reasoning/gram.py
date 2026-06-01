@@ -68,6 +68,8 @@ class GenerativeRecursiveReasoningModelConfig(BaseModel):
     min_log_std: float = -10.0
     max_log_std: float = 2.0
     detach_lprm_core: bool = False
+    train_prior_carry: bool = False
+    posterior_final_only: bool = False
     posterior_target_conditioning: str = "add"
     decoder_swiglu: bool = True
 
@@ -303,19 +305,23 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
         p_mu, p_log_std = self._prior_params(u)
 
         q_mu = q_log_std = None
+        prior_eps = p_mu + torch.exp(p_log_std) * torch.randn_like(p_mu)
+        prior_h = u + prior_eps
+
         if sample_from_posterior:
             assert target_embeddings is not None
             q_mu, q_log_std = self._posterior_params(u, target_embeddings)
             sample_mu, sample_log_std = q_mu, q_log_std
+            eps = sample_mu + torch.exp(sample_log_std) * torch.randn_like(sample_mu)
+            h = u + eps
         else:
             sample_mu, sample_log_std = p_mu, p_log_std
-
-        eps = sample_mu + torch.exp(sample_log_std) * torch.randn_like(sample_mu)
-        h = u + eps
+            h = prior_h
 
         info = {
             "prior_mu": p_mu,
             "prior_log_std": p_log_std,
+            "prior_h": prior_h,
             "sample_mu": sample_mu,
             "sample_log_std": sample_log_std,
             "v_logits": self._value_logits(h),
@@ -347,6 +353,7 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
 
         h, l = carry.h, carry.l
         early_h_states = []
+        early_sample_from_posterior = sample_from_posterior and not self.config.posterior_final_only
 
         with torch.no_grad():
             for _ in range(max(self.config.resolved_T() - 1, 0)):
@@ -356,7 +363,7 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
                     input_embeddings,
                     target_embeddings,
                     seq_info,
-                    sample_from_posterior=sample_from_posterior,
+                    sample_from_posterior=early_sample_from_posterior,
                 )
                 early_h_states.append(h.detach())
 
@@ -398,7 +405,10 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
             if key in final_info:
                 outputs[key] = final_info[key]
 
-        new_carry = GenerativeRecursiveReasoningModelInnerCarry(h=h.detach(), l=l.detach())
+        carry_h = h
+        if self.training and sample_from_posterior and self.config.train_prior_carry:
+            carry_h = final_info["prior_h"]
+        new_carry = GenerativeRecursiveReasoningModelInnerCarry(h=carry_h.detach(), l=l.detach())
         return new_carry, outputs
 
 

@@ -55,6 +55,8 @@ def make_config(args: argparse.Namespace | None = None) -> GRAMTrainConfig:
         min_log_std=get("min_log_std", -10.0),
         max_log_std=get("max_log_std", 0.0),
         detach_lprm_core=get("detach_lprm_core", True),
+        train_prior_carry=get("train_prior_carry", True),
+        posterior_final_only=get("posterior_final_only", True),
         beta=get("beta", 0.07),
         kl_balance=get("kl_balance", 0.8),
         act_loss_weight=get("act_loss_weight", 1.0),
@@ -96,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rebuild-data", action="store_true")
     parser.add_argument("--no-build-if-missing", action="store_true")
     parser.add_argument("--no-infer-every-eval", action="store_true")
-    parser.add_argument("--infer-split", choices=["train", "test"], default="test")
+    parser.add_argument("--infer-split", choices=["train", "test", "both"], default="test")
     parser.add_argument("--infer-num-puzzles", type=int, default=100)
     parser.add_argument("--infer-num-samples", type=int, default=20)
     parser.add_argument("--infer-steps", type=int, default=16)
@@ -109,6 +111,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-log-std", type=float, default=0.0)
     parser.add_argument("--lprm-detach-core", dest="detach_lprm_core", action="store_true", default=True)
     parser.add_argument("--lprm-train-core", dest="detach_lprm_core", action="store_false")
+    parser.add_argument("--prior-carry", dest="train_prior_carry", action="store_true", default=True)
+    parser.add_argument("--posterior-carry", dest="train_prior_carry", action="store_false")
+    parser.add_argument("--posterior-final-transition-only", dest="posterior_final_only", action="store_true", default=True)
+    parser.add_argument("--posterior-all-transitions", dest="posterior_final_only", action="store_false")
     parser.add_argument("--lprm-reward-type", choices=["token_accuracy", "nqueens"], default="nqueens")
     parser.add_argument("--prior-lprm-loss-weight", type=float, default=1.0)
     parser.add_argument("--prior-aux-loss-weight", type=float, default=0.0)
@@ -128,25 +134,29 @@ def make_inference_callback(args: argparse.Namespace):
         if args.infer_raw_checkpoint and raw_checkpoint.exists():
             inference_checkpoint = raw_checkpoint
             print(f"INFER using raw checkpoint={inference_checkpoint}", flush=True)
-        summary = run_inference(
-            argparse.Namespace(
-                checkpoint=str(inference_checkpoint),
-                data_path=args.data_path,
-                split=args.infer_split,
-                n=8,
-                num_puzzles=args.infer_num_puzzles,
-                num_samples=args.infer_num_samples,
-                steps=args.infer_steps,
-                device=args.device,
-                disable_act=args.infer_disable_act,
-                print_puzzles=args.infer_print_puzzles,
-                print_samples=args.infer_print_samples,
-            )
-        )
-        summary.update({"epoch": epoch, "train_step": step})
+
+        infer_splits = ["train", "test"] if args.infer_split == "both" else [args.infer_split]
         metrics_path = Path(args.checkpoint_path) / "nqweens_eval_metrics.jsonl"
-        with metrics_path.open("a") as f:
-            f.write(json.dumps(summary) + "\n")
+        for split in infer_splits:
+            print(f"INFER split={split}", flush=True)
+            summary = run_inference(
+                argparse.Namespace(
+                    checkpoint=str(inference_checkpoint),
+                    data_path=args.data_path,
+                    split=split,
+                    n=8,
+                    num_puzzles=args.infer_num_puzzles,
+                    num_samples=args.infer_num_samples,
+                    steps=args.infer_steps,
+                    device=args.device,
+                    disable_act=args.infer_disable_act,
+                    print_puzzles=args.infer_print_puzzles,
+                    print_samples=args.infer_print_samples,
+                )
+            )
+            summary.update({"epoch": epoch, "train_step": step})
+            with metrics_path.open("a") as f:
+                f.write(json.dumps(summary) + "\n")
         try:
             import torch
 

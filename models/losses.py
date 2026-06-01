@@ -274,10 +274,10 @@ class GRAMLossHead(nn.Module):
                 "act_loss": torch.as_tensor(act_loss).detach(),
                 "lprm_loss": torch.as_tensor(lprm_loss).detach(),
                 "lprm_reward": reward.sum(),
-                "prior_lprm_loss": torch.as_tensor(prior_lprm_loss).detach(),
-                "prior_lm_loss": torch.as_tensor(prior_recon_loss).detach(),
-                "prior_lprm_reward": prior_reward.sum(),
-                "prior_exact_accuracy": (valid_metrics & prior_seq_is_correct.to(torch.bool)).sum(),
+                "carry_prior_lprm_loss": torch.as_tensor(prior_lprm_loss).detach(),
+                "carry_prior_lm_loss": torch.as_tensor(prior_recon_loss).detach(),
+                "carry_prior_lprm_reward": prior_reward.sum(),
+                "carry_prior_exact_accuracy": (valid_metrics & prior_seq_is_correct.to(torch.bool)).sum(),
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == exact.to(torch.bool))).sum(),
                 "steps": torch.where(valid_metrics, carry.steps, 0).sum(),
                 "prior_std": outputs["prior_std"].to(torch.float32).mean(),
@@ -290,9 +290,9 @@ class GRAMLossHead(nn.Module):
             if prior_stats is not None:
                 metrics.update(
                     {
-                        "prior_queen_count": prior_stats["queen_count"].sum(),
-                        "prior_conflicts": prior_stats["conflicts"].sum(),
-                        "prior_clue_violations": prior_stats["clue_violations"].sum(),
+                        "carry_prior_queen_count": prior_stats["queen_count"].sum(),
+                        "carry_prior_conflicts": prior_stats["conflicts"].sum(),
+                        "carry_prior_clue_violations": prior_stats["clue_violations"].sum(),
                     }
                 )
             outputs["preds"] = preds

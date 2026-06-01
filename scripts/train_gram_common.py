@@ -66,6 +66,8 @@ class GRAMTrainConfig:
     min_log_std: float = -10.0
     max_log_std: float = 2.0
     detach_lprm_core: bool = False
+    train_prior_carry: bool = False
+    posterior_final_only: bool = False
 
     beta: float = 0.1
     kl_balance: float = 0.8
@@ -210,6 +212,8 @@ def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: i
         "min_log_std": config.min_log_std,
         "max_log_std": config.max_log_std,
         "detach_lprm_core": config.detach_lprm_core,
+        "train_prior_carry": config.train_prior_carry,
+        "posterior_final_only": config.posterior_final_only,
     }
     model = GenerativeRecursiveReasoningModel_ACTV1(model_cfg)
     loss_model = GRAMLossHead(
@@ -403,11 +407,11 @@ def train(
                                 normalized[k] = v / count
                             elif k in {
                                 "lprm_reward",
-                                "prior_lprm_reward",
-                                "prior_exact_accuracy",
-                                "prior_queen_count",
-                                "prior_conflicts",
-                                "prior_clue_violations",
+                                "carry_prior_lprm_reward",
+                                "carry_prior_exact_accuracy",
+                                "carry_prior_queen_count",
+                                "carry_prior_conflicts",
+                                "carry_prior_clue_violations",
                             }:
                                 normalized[k] = v / count
                             elif k in {
