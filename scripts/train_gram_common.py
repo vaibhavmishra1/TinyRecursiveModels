@@ -87,13 +87,17 @@ def init_distributed() -> DistributedContext:
     if not torch.cuda.is_available():
         raise RuntimeError("Distributed GRAM training uses NCCL and requires CUDA.")
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    torch.cuda.set_device(local_rank)
+
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        try:
+            dist.init_process_group(backend="nccl", device_id=torch.device("cuda", local_rank))
+        except TypeError:
+            dist.init_process_group(backend="nccl")
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get("LOCAL_RANK", str(rank % torch.cuda.device_count())))
-    torch.cuda.set_device(local_rank)
     return DistributedContext(rank=rank, world_size=world_size, local_rank=local_rank, enabled=True)
 
 
@@ -104,7 +108,10 @@ def finalize_distributed(context: DistributedContext) -> None:
 
 def barrier(context: DistributedContext) -> None:
     if context.enabled:
-        dist.barrier()
+        try:
+            dist.barrier(device_ids=[context.local_rank])
+        except TypeError:
+            dist.barrier()
 
 
 def select_device(name: str, context: Optional[DistributedContext] = None) -> torch.device:
@@ -144,19 +151,29 @@ def create_loader(config: GRAMTrainConfig, split: str, epochs_per_iter: int, ran
 
 
 def _strip_compile_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    if not any(k.startswith("_orig_mod.") for k in state_dict):
-        return state_dict
-    return {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+    return {k.removeprefix("_orig_mod.").replace("._orig_mod.", "."): v for k, v in state_dict.items()}
 
 
 def _unwrap_compiled(model: nn.Module) -> nn.Module:
     return getattr(model, "_orig_mod", model)
 
 
+def _state_dict_for_save(model: nn.Module) -> dict[str, torch.Tensor]:
+    return _strip_compile_prefix(_unwrap_compiled(model).state_dict())
+
+
 def _broadcast_model_state(model: nn.Module) -> None:
     with torch.no_grad():
         for tensor in list(model.parameters()) + list(model.buffers()):
             dist.broadcast(tensor, src=0)
+
+
+def _compile_for_training(loss_model: GRAMLossHead) -> nn.Module:
+    # Compiling the whole GRAMLossHead asks Dynamo/Inductor to trace the full
+    # N_sup supervision loop. Compiling the inner recurrent model keeps first
+    # compile time much lower while still optimizing the repeated heavy block.
+    loss_model.model.inner = torch.compile(loss_model.model.inner, mode="reduce-overhead")  # type: ignore[assignment]
+    return loss_model
 
 
 def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: int = 0, world_size: int = 1):
@@ -206,7 +223,7 @@ def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: i
         _broadcast_model_state(loss_model)
 
     if config.compile and device.type == "cuda":
-        loss_model = torch.compile(loss_model)  # type: ignore[assignment]
+        loss_model = _compile_for_training(loss_model)  # type: ignore[assignment]
     return loss_model
 
 
@@ -235,7 +252,7 @@ def save_checkpoint(path: Path, model: nn.Module, step: int, ema_helper: Optiona
     path.mkdir(parents=True, exist_ok=True)
     checkpoint_file = path / f"step_{step}"
     model_to_save = ema_helper.ema_copy(model) if ema_helper is not None else model
-    torch.save(_unwrap_compiled(model_to_save).state_dict(), checkpoint_file)
+    torch.save(_state_dict_for_save(model_to_save), checkpoint_file)
     if model_to_save is not model:
         del model_to_save
     return checkpoint_file
@@ -321,6 +338,9 @@ def train(
             print(f"world_size={context.world_size}")
             print(f"global_batch_size={config.global_batch_size}")
             print(f"local_batch_size={local_batch_size}")
+            print(f"compile={config.compile}")
+            if config.compile:
+                print("compile_mode=inner_reduce_overhead")
             print(f"total_steps={total_steps}")
             print(f"metadata={train_metadata}")
 

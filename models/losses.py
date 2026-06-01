@@ -105,9 +105,9 @@ class ACTLossHead(nn.Module):
 class GRAMLossHead(nn.Module):
     """Paper-faithful GRAM surrogate objective with deep supervision.
 
-    The model forward performs one supervision step containing T stochastic transitions.
-    This loss head repeats it N_sup times, applies reconstruction and the final-step KL
-    of each supervision step, and adds the ACT and LPRM auxiliary losses from Appendix A.
+    The trainer keeps the recurrent carry between batches, so each optimizer
+    step advances one supervision step. The model's halt_max_steps controls the
+    N_sup reset cadence, matching the ACT-style training loop in this codebase.
     """
 
     def __init__(
@@ -151,80 +151,46 @@ class GRAMLossHead(nn.Module):
         return_keys: Sequence[str],
         **model_kwargs,
     ) -> Tuple[Any, torch.Tensor, Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
-        carry = model_kwargs["carry"]
-        batch = model_kwargs["batch"]
+        carry, outputs = self.model(**model_kwargs)
+        labels = carry.current_data["labels"]
+        recon_loss, preds, token_accuracy, seq_is_correct, loss_counts = self._reconstruction_loss(outputs["logits"], labels)
 
-        recon_loss = 0
-        kl_loss = 0
-        lprm_loss = 0
-        act_q_halt_logits = []
-        act_q_continue_logits = []
-        seq_correct_by_step = []
-        token_accuracy_by_step = []
-        last_outputs = None
-        last_preds = None
-        last_loss_counts = None
+        kl_loss = torch.zeros((), dtype=recon_loss.dtype, device=recon_loss.device)
+        if "kl_prior_grad" in outputs and "kl_posterior_grad" in outputs:
+            balanced_kl = self.kl_balance * outputs["kl_prior_grad"] + (1.0 - self.kl_balance) * outputs["kl_posterior_grad"]
+            kl_loss = balanced_kl.sum()
 
-        for _step in range(self.deep_supervision_steps):
-            carry, outputs = self.model(carry=carry, batch=batch)
-            labels = carry.current_data["labels"]
-            step_recon, preds, token_accuracy, seq_is_correct, loss_counts = self._reconstruction_loss(outputs["logits"], labels)
-            recon_loss = recon_loss + step_recon
+        lprm_loss = torch.zeros((), dtype=recon_loss.dtype, device=recon_loss.device)
+        reward = token_accuracy.detach()
+        for v_logits in outputs.get("transition_v_logits", [outputs["v_logits"]]):
+            v_pred = torch.sigmoid(v_logits)
+            lprm_loss = lprm_loss + F.mse_loss(v_pred, reward.to(v_pred.dtype), reduction="sum")
 
-            if "kl_prior_grad" in outputs and "kl_posterior_grad" in outputs:
-                balanced_kl = self.kl_balance * outputs["kl_prior_grad"] + (1.0 - self.kl_balance) * outputs["kl_posterior_grad"]
-                kl_loss = kl_loss + balanced_kl.sum()
-
-            reward = token_accuracy.detach()
-            for v_logits in outputs.get("transition_v_logits", [outputs["v_logits"]]):
-                v_pred = torch.sigmoid(v_logits)
-                lprm_loss = lprm_loss + F.mse_loss(v_pred, reward.to(v_pred.dtype), reduction="sum")
-
-            act_q_halt_logits.append(outputs["q_halt_logits"])
-            act_q_continue_logits.append(outputs["q_continue_logits"])
-            seq_correct_by_step.append(seq_is_correct.to(outputs["q_halt_logits"].dtype).detach())
-            token_accuracy_by_step.append(token_accuracy.detach())
-            last_outputs = outputs
-            last_preds = preds
-            last_loss_counts = loss_counts
-
-        assert last_outputs is not None and last_preds is not None and last_loss_counts is not None
-
-        recon_loss = recon_loss / self.deep_supervision_steps
-        kl_loss = kl_loss / self.deep_supervision_steps
-        lprm_loss = lprm_loss / self.deep_supervision_steps
-
-        act_loss = 0
-        for i, (q_halt, q_continue) in enumerate(zip(act_q_halt_logits, act_q_continue_logits)):
-            halt_target = seq_correct_by_step[i]
-            if i + 1 < len(act_q_halt_logits):
-                continue_target = torch.maximum(act_q_halt_logits[i + 1].detach(), act_q_continue_logits[i + 1].detach())
-            else:
-                continue_target = halt_target
-            act_loss = act_loss + F.mse_loss(q_halt, halt_target, reduction="sum")
-            act_loss = act_loss + F.mse_loss(q_continue, continue_target.to(q_continue.dtype), reduction="sum")
-        act_loss = act_loss / self.deep_supervision_steps
+        halt_target = seq_is_correct.to(outputs["q_halt_logits"].dtype).detach()
+        continue_target = outputs.get("target_q_continue_logits", halt_target).to(outputs["q_continue_logits"].dtype).detach()
+        act_loss = F.mse_loss(outputs["q_halt_logits"], halt_target, reduction="sum")
+        act_loss = act_loss + F.mse_loss(outputs["q_continue_logits"], continue_target, reduction="sum")
 
         total_loss = recon_loss + self.beta * kl_loss + self.act_loss_weight * act_loss + self.lprm_loss_weight * lprm_loss
 
         with torch.no_grad():
-            valid_metrics = last_loss_counts > 0
+            valid_metrics = loss_counts > 0
             count = valid_metrics.sum()
-            exact = seq_correct_by_step[-1]
+            exact = seq_is_correct.detach()
             metrics = {
                 "count": count,
-                "accuracy": torch.where(valid_metrics, token_accuracy_by_step[-1], 0).sum(),
+                "accuracy": torch.where(valid_metrics, token_accuracy, 0).sum(),
                 "exact_accuracy": (valid_metrics & exact.to(torch.bool)).sum(),
                 "lm_loss": recon_loss.detach(),
                 "kl_loss": kl_loss.detach(),
                 "act_loss": torch.as_tensor(act_loss).detach(),
                 "lprm_loss": torch.as_tensor(lprm_loss).detach(),
-                "q_halt_accuracy": (valid_metrics & ((last_outputs["q_halt_logits"] >= 0) == exact.to(torch.bool))).sum(),
+                "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == exact.to(torch.bool))).sum(),
                 "steps": torch.where(valid_metrics, carry.steps, 0).sum(),
-                "prior_std": last_outputs["prior_std"].to(torch.float32).mean(),
-                "sample_std": last_outputs["sample_std"].to(torch.float32).mean(),
+                "prior_std": outputs["prior_std"].to(torch.float32).mean(),
+                "sample_std": outputs["sample_std"].to(torch.float32).mean(),
             }
-            last_outputs["preds"] = last_preds
+            outputs["preds"] = preds
 
-        detached_outputs = {k: last_outputs[k].detach() for k in return_keys if k in last_outputs}
+        detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
         return carry, total_loss, metrics, detached_outputs, carry.halted.all()

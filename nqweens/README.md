@@ -44,13 +44,12 @@ torchrun --standalone --nnodes 1 --nproc-per-node 4 nqweens/train_8x8.py \
   --data-path nqweens/data/nqueens-8x8 \
   --checkpoint-path checkpoints/GRAM-NQueens-8x8/gram_nqueens_8x8 \
   --global-batch-size 256 \
-  --device cuda \
-  --compile
+  --device cuda
 ```
 
 By default, training saves an EMA checkpoint and runs N-Queens inference after every `--eval-interval` epochs. With the default `--eval-interval 300`, this produces `nqweens_eval_metrics.jsonl` in the checkpoint directory every 300 epochs. Add `--no-infer-every-eval` to disable periodic inference.
 
-The run scripts set `COMPILE=1` by default. The first few iterations can include compile warmup, but sustained training should be judged after compilation settles. For `GLOBAL_BATCH_SIZE=256`, a 2-3 hour full run requires about `8-12` optimizer steps/sec.
+`torch.compile` is opt-in with `COMPILE=1` or `--compile`. On the tested PyTorch stack it can fail inside Inductor with a recursion error, so the run scripts default to eager mode. For `GLOBAL_BATCH_SIZE=256`, a 2-3 hour full run requires about `8-12` optimizer steps/sec.
 
 Run inference with ACT halting and LPRM-ranked candidate selection, and report validity plus coverage with 20 samples:
 

@@ -424,6 +424,13 @@ class GenerativeRecursiveReasoningModel_ACTV1(nn.Module):
             new_steps = new_steps + 1
             is_last_step = new_steps >= self.config.halt_max_steps
             halted = is_last_step
+            if self.training and self.config.halt_max_steps > 1:
+                _, next_outputs = self.inner(new_inner_carry, new_current_data)
+                outputs["target_q_continue_logits"] = torch.where(
+                    is_last_step,
+                    next_outputs["q_halt_logits"],
+                    torch.maximum(next_outputs["q_halt_logits"], next_outputs["q_continue_logits"]),
+                )
             if not self.training and self.config.halt_max_steps > 1:
                 halted = halted | (outputs["q_halt_logits"] > outputs["q_continue_logits"])
 
