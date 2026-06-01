@@ -329,12 +329,13 @@ class GenerativeRecursiveReasoningModelInner(nn.Module):
         self,
         carry: GenerativeRecursiveReasoningModelInnerCarry,
         batch: Dict[str, torch.Tensor],
+        force_prior: bool = False,
     ) -> Tuple[GenerativeRecursiveReasoningModelInnerCarry, Dict[str, torch.Tensor]]:
         seq_info = {"cos_sin": self.rotary_emb() if hasattr(self, "rotary_emb") else None}
         input_embeddings = self._sequence_embeddings(batch["inputs"], batch["puzzle_identifiers"])
 
         labels = batch.get("labels")
-        sample_from_posterior = self.training and labels is not None
+        sample_from_posterior = self.training and labels is not None and not force_prior
         target_embeddings = self._target_embeddings(labels, batch["puzzle_identifiers"]) if sample_from_posterior else None
 
         h, l = carry.h, carry.l
@@ -415,6 +416,7 @@ class GenerativeRecursiveReasoningModel_ACTV1(nn.Module):
         self,
         carry: GenerativeRecursiveReasoningModelCarry,
         batch: Dict[str, torch.Tensor],
+        force_prior: bool = False,
     ) -> Tuple[GenerativeRecursiveReasoningModelCarry, Dict[str, torch.Tensor]]:
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
         new_steps = torch.where(carry.halted, 0, carry.steps)
@@ -423,7 +425,7 @@ class GenerativeRecursiveReasoningModel_ACTV1(nn.Module):
             for k, v in carry.current_data.items()
         }
 
-        new_inner_carry, outputs = self.inner(new_inner_carry, new_current_data)
+        new_inner_carry, outputs = self.inner(new_inner_carry, new_current_data, force_prior=force_prior)
 
         with torch.no_grad():
             new_steps = new_steps + 1

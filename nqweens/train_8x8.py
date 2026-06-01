@@ -56,6 +56,9 @@ def make_config(args: argparse.Namespace | None = None) -> GRAMTrainConfig:
         kl_balance=get("kl_balance", 0.8),
         act_loss_weight=get("act_loss_weight", 1.0),
         lprm_loss_weight=get("lprm_loss_weight", 1.0),
+        lprm_reward_type=get("lprm_reward_type", "nqueens"),
+        prior_lprm_loss_weight=get("prior_lprm_loss_weight", 1.0),
+        prior_aux_loss_weight=get("prior_aux_loss_weight", 0.0),
         loss_type=get("loss_type", "stablemax_cross_entropy"),
         seed=get("seed", 0),
         device=get("device", "auto"),
@@ -94,7 +97,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--infer-steps", type=int, default=16)
     parser.add_argument("--infer-print-puzzles", type=int, default=0)
     parser.add_argument("--infer-print-samples", type=int, default=0)
-    parser.add_argument("--infer-disable-act", action="store_true")
+    parser.add_argument("--infer-disable-act", dest="infer_disable_act", action="store_true", default=True)
+    parser.add_argument("--infer-use-act", dest="infer_disable_act", action="store_false")
+    parser.add_argument("--lprm-reward-type", choices=["token_accuracy", "nqueens"], default="nqueens")
+    parser.add_argument("--prior-lprm-loss-weight", type=float, default=1.0)
+    parser.add_argument("--prior-aux-loss-weight", type=float, default=0.0)
     return parser.parse_args()
 
 

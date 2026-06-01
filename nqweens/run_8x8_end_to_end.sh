@@ -13,7 +13,7 @@ COMPILE="${COMPILE:-0}"
 NUM_INFER_PUZZLES="${NUM_INFER_PUZZLES:-100}"
 NUM_SAMPLES="${NUM_SAMPLES:-20}"
 INFER_EVERY_EVAL="${INFER_EVERY_EVAL:-1}"
-INFER_DISABLE_ACT="${INFER_DISABLE_ACT:-0}"
+INFER_DISABLE_ACT="${INFER_DISABLE_ACT:-1}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 if [[ "$COMPILE" == "1" ]]; then
@@ -44,6 +44,8 @@ if [[ "$INFER_EVERY_EVAL" != "1" ]]; then
 fi
 if [[ "$INFER_DISABLE_ACT" == "1" ]]; then
   train_args+=(--infer-disable-act)
+else
+  train_args+=(--infer-use-act)
 fi
 if [[ "$COMPILE" == "1" ]]; then
   train_args+=(--compile)
@@ -70,5 +72,7 @@ infer_args=(
 )
 if [[ "$INFER_DISABLE_ACT" == "1" ]]; then
   infer_args+=(--disable-act)
+else
+  infer_args+=(--use-act)
 fi
 "$PYTHON" "${infer_args[@]}"

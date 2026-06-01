@@ -68,6 +68,9 @@ class GRAMTrainConfig:
     kl_balance: float = 0.8
     act_loss_weight: float = 1.0
     lprm_loss_weight: float = 1.0
+    lprm_reward_type: str = "token_accuracy"
+    prior_lprm_loss_weight: float = 0.0
+    prior_aux_loss_weight: float = 0.0
     loss_type: str = "stablemax_cross_entropy"
 
     seed: int = 0
@@ -211,6 +214,9 @@ def build_model(config: GRAMTrainConfig, metadata, device: torch.device, rank: i
         kl_balance=config.kl_balance,
         act_loss_weight=config.act_loss_weight,
         lprm_loss_weight=config.lprm_loss_weight,
+        lprm_reward_type=config.lprm_reward_type,
+        prior_lprm_loss_weight=config.prior_lprm_loss_weight,
+        prior_aux_loss_weight=config.prior_aux_loss_weight,
     )
     loss_model.to(device)
 
@@ -386,6 +392,15 @@ def train(
                             if k.endswith("loss"):
                                 normalized[k] = v / global_batch_size
                             elif k in {"accuracy", "exact_accuracy", "q_halt_accuracy", "steps"}:
+                                normalized[k] = v / count
+                            elif k in {
+                                "lprm_reward",
+                                "prior_lprm_reward",
+                                "prior_exact_accuracy",
+                                "prior_queen_count",
+                                "prior_conflicts",
+                                "prior_clue_violations",
+                            }:
                                 normalized[k] = v / count
                             elif k in {"prior_std", "sample_std"}:
                                 normalized[k] = v / context.world_size
